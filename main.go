@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync/atomic"
 )
 
 type apiHandler struct{}
@@ -16,22 +17,41 @@ func (apiHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	fmt.Fprintf(w, "Welcome to the home page!")
 }
 
+type apiConfig struct {
+	fileserverHits atomic.Int32
+}
+
+func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		cfg.fileserverHits.Add(1)
+		next.ServeHTTP(w, req)
+	})
+}
+
 func main() {
 	port := ":8080"
+	apiCfg := apiConfig{}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/app", func(w http.ResponseWriter, req *http.Request) {
+	mux.Handle("/app", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		http.ServeFile(w, req, "./index.html")
-	})
-	mux.HandleFunc("/app/assets", func(w http.ResponseWriter, req *http.Request) {
+	})))
+	mux.Handle("/app/assets", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		http.ServeFile(w, req, "./index.html")
 		w.Write([]byte(""))
-	})
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, req *http.Request) {
+	})))
+	mux.Handle("/healthz", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
-	})
-	//http.FileServer(http.Dir("."))
+	})))
+	mux.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(fmt.Sprintf("Hits: %d", apiCfg.fileserverHits.Load())))
+	}))
+	mux.Handle("/reset", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		apiCfg.fileserverHits.Store(0)
+	}))
 	log.Printf("Server started on http://localhost%s\n", port)
 	log.Fatal(http.ListenAndServe(":8080", mux))
 	// mux.Handle("/", apiHandler{})
