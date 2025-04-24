@@ -63,15 +63,15 @@ func main() {
 		params := parameters{}
 		err := decoder.Decode(&params)
 		if err != nil {
-			return500(w)
+			returnError(w, "Something went wrong", 500)
 			return
 		}
 		log.Printf("len: %d", len(params.Body))
 		if len(params.Body) > 140 {
-			lengthError(w)
+			returnError(w, "Chirp is too long", 400)
 			return
 		}
-		success(w)
+		returnJson(w)
 		apiCfg.fileserverHits.Store(0)
 	}))
 	log.Printf("Server started on http://localhost%s\n", port)
@@ -79,13 +79,12 @@ func main() {
 	// mux.Handle("/", apiHandler{})
 }
 
-func return500(w http.ResponseWriter) {
-
+func returnError(w http.ResponseWriter, error string, sc int) {
 	type returnVals struct {
 		Error string `json:"error"`
 	}
 	respBody := returnVals{
-		Error: "Something went wrong",
+		Error: error,
 	}
 	dat, err := json.Marshal(respBody)
 	if err != nil {
@@ -94,32 +93,12 @@ func return500(w http.ResponseWriter) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
+	w.WriteHeader(sc)
 	w.Write(dat)
 	return
 }
 
-func lengthError(w http.ResponseWriter) {
-
-	type returnVals struct {
-		Error string `json:"error"`
-	}
-	respBody := returnVals{
-		Error: "Chirp is too long",
-	}
-	dat, err := json.Marshal(respBody)
-	if err != nil {
-		log.Printf("Error marshalling JSON: %s", err)
-		w.WriteHeader(400)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-	w.Write(dat)
-	return
-}
-
-func success(w http.ResponseWriter) {
+func returnJson(w http.ResponseWriter) {
 	type returnVals struct {
 		Valid bool `json:"valid"`
 	}
