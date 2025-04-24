@@ -35,20 +35,20 @@ func main() {
 	mux.Handle("/app", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		http.ServeFile(w, req, "./index.html")
 	})))
-	mux.Handle("/app/assets", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	mux.Handle("/app/assets/", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		http.ServeFile(w, req, "./index.html")
 		w.Write([]byte(""))
 	})))
-	mux.Handle("/healthz", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	mux.Handle("GET /api/healthz", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})))
-	mux.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	mux.Handle("GET /api/metrics", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(fmt.Sprintf("Hits: %d", apiCfg.fileserverHits.Load())))
 	}))
-	mux.Handle("/reset", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	mux.Handle("POST /api/reset", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		apiCfg.fileserverHits.Store(0)
 	}))
