@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -71,12 +72,27 @@ func main() {
 			returnError(w, "Chirp is too long", 400)
 			return
 		}
-		returnJson(w)
+		formattedBody := replaceWithStar(params.Body)
+
+		returnJson(w, formattedBody)
 		apiCfg.fileserverHits.Store(0)
 	}))
 	log.Printf("Server started on http://localhost%s\n", port)
 	log.Fatal(http.ListenAndServe(":8080", mux))
 	// mux.Handle("/", apiHandler{})
+}
+
+func replaceWithStar(s string) string {
+	words := strings.Split(s, " ")
+	for i, el := range words {
+		log.Printf("Idx %d, string: %s", i, el)
+		lower := strings.ToLower(el)
+		switch lower {
+		case "kerfuffle", "sharbert", "fornax":
+			words[i] = "****"
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 func returnError(w http.ResponseWriter, error string, sc int) {
@@ -98,12 +114,12 @@ func returnError(w http.ResponseWriter, error string, sc int) {
 	return
 }
 
-func returnJson(w http.ResponseWriter) {
+func returnJson(w http.ResponseWriter, msg string) {
 	type returnVals struct {
-		Valid bool `json:"valid"`
+		CleanedBody string `json:"cleaned_body"`
 	}
 	respBody := returnVals{
-		Valid: true,
+		CleanedBody: msg,
 	}
 	dat, err := json.Marshal(respBody)
 	if err != nil {
