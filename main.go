@@ -1,12 +1,19 @@
 package main
 
 import (
+	"Chirpy/internal/database"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/google/uuid"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 type apiHandler struct{}
@@ -31,11 +38,62 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 }
 
 func main() {
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	log.Printf("url: %s", dbURL)
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatalf("Error opening database: %v", err)
+		return
+	}
+
+	chirpy := database.New(db)
 	port := ":8080"
 	apiCfg := apiConfig{}
 	mux := http.NewServeMux()
 	mux.Handle("/app", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		http.ServeFile(w, req, "./index.html")
+	})))
+
+	mux.Handle("/api/users", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		type parameters struct {
+			Email string `json:"email"`
+		}
+		decoder := json.NewDecoder(req.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			returnError(w, "Something went wrong", 500)
+			return
+		}
+		user, err := chirpy.CreateUser(req.Context(), params.Email)
+		if err != nil {
+			log.Fatalf("Error creating new user: %v", err)
+			returnError(w, "Error creating new user", 500)
+			return
+		}
+		type userResp struct {
+			ID        string `json:"id"`
+			Email     string `json:"email"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		}
+		resp := userResp{
+			ID:        user.ID.String(),
+			Email:     user.Email,
+			CreatedAt: user.CreatedAt.String(),
+			UpdatedAt: user.UpdatedAt.String(),
+		}
+		jsonData, err := json.Marshal(resp)
+
+		if err != nil {
+			returnError(w, "Error parsing a json", 500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write(jsonData)
 	})))
 	mux.Handle("/app/assets/", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		http.ServeFile(w, req, "./index.html")
@@ -53,12 +111,15 @@ func main() {
 		w.Write([]byte(fmt.Sprintf("<p>Chirpy has been visited %d times!</p>", apiCfg.fileserverHits.Load())))
 	}))
 	mux.Handle("POST /admin/reset", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		chirpy.DeleteAllChirps(req.Context())
+		chirpy.DeleteAllUsers(req.Context())
 		w.WriteHeader(http.StatusOK)
 		apiCfg.fileserverHits.Store(0)
 	}))
-	mux.Handle("POST /api/validate_chirp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	mux.Handle("POST /api/chirps", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		type parameters struct {
-			Body string `json:"body"`
+			Body   string `json:"body"`
+			UserID string `json:"user_id"`
 		}
 		decoder := json.NewDecoder(req.Body)
 		params := parameters{}
@@ -73,8 +134,40 @@ func main() {
 			return
 		}
 		formattedBody := replaceWithStar(params.Body)
+		userID, err := uuid.Parse(params.UserID)
+		if err != nil {
+			returnError(w, "Error parsing uuid", 500)
+			return
+		}
 
-		returnJson(w, formattedBody)
+		arg := database.CreateChirpParams{
+			Body:   formattedBody,
+			UserID: userID,
+		}
+		chirp, err := chirpy.CreateChirp(req.Context(), arg)
+		if err != nil {
+			returnError(w, "Error creating chirp", 500)
+			return
+		}
+
+		type userResp struct {
+			Body   string `json:"body"`
+			UserId string `json:"user_id"`
+		}
+		resp := userResp{
+			Body:   formattedBody,
+			UserId: chirp.UserID.String(),
+		}
+		jsonData, err := json.Marshal(resp)
+
+		if err != nil {
+			returnError(w, "Error parsing a json", 500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write(jsonData)
 		apiCfg.fileserverHits.Store(0)
 	}))
 	log.Printf("Server started on http://localhost%s\n", port)
