@@ -1,6 +1,7 @@
 package main
 
 import (
+	"Chirpy/internal/auth"
 	"Chirpy/internal/database"
 	"database/sql"
 	"encoding/json"
@@ -40,14 +41,13 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
-	log.Printf("url: %s", dbURL)
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatalf("Error opening database: %v", err)
 		return
 	}
 
-	chirpy := database.New(db)
+	chirpyDb := database.New(db)
 	port := ":8080"
 	apiCfg := apiConfig{}
 	mux := http.NewServeMux()
@@ -55,9 +55,10 @@ func main() {
 		http.ServeFile(w, req, "./index.html")
 	})))
 
-	mux.Handle("/api/users", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	mux.Handle("POST /api/users", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		type parameters struct {
-			Email string `json:"email"`
+			Email    string `json:"email"`
+			Password string `json:"password"`
 		}
 		decoder := json.NewDecoder(req.Body)
 		params := parameters{}
@@ -66,7 +67,17 @@ func main() {
 			returnError(w, "Something went wrong", 500)
 			return
 		}
-		user, err := chirpy.CreateUser(req.Context(), params.Email)
+		hashedPassword, err := auth.HashPassword(params.Password)
+		if err != nil {
+			returnError(w, "Something went wrong", 500)
+			return
+		}
+
+		args := database.CreateUserParams{
+			Email:          params.Email,
+			HashedPassword: hashedPassword,
+		}
+		user, err := chirpyDb.CreateUser(req.Context(), args)
 		if err != nil {
 			log.Fatalf("Error creating new user: %v", err)
 			returnError(w, "Error creating new user", 500)
@@ -95,6 +106,57 @@ func main() {
 		w.WriteHeader(http.StatusCreated)
 		w.Write(jsonData)
 	})))
+
+	mux.Handle("POST /api/login", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+
+		var err error
+		type parameters struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		decoder := json.NewDecoder(req.Body)
+		params := parameters{}
+		err = decoder.Decode(&params)
+		if err != nil {
+			returnError(w, "Something went wrong", 500)
+			return
+		}
+		user, err := chirpyDb.GetUserByEmail(req.Context(), params.Email)
+		if err != nil {
+			returnError(w, "Error while getting user from db", 500)
+			return
+		}
+		log.Printf("hahsed pass %s, email %s", user.HashedPassword, user.Email)
+
+		err = auth.CheckPasswordHash(user.HashedPassword, params.Password)
+		if err != nil {
+			returnError(w, "Unautharized", 401)
+			return
+		}
+
+		type userResp struct {
+			ID        string `json:"id"`
+			Email     string `json:"email"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		}
+		resp := userResp{
+			ID:        user.ID.String(),
+			Email:     user.Email,
+			CreatedAt: user.CreatedAt.String(),
+			UpdatedAt: user.UpdatedAt.String(),
+		}
+		jsonData, err := json.Marshal(resp)
+
+		if err != nil {
+			returnError(w, "Error parsing a json", 500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(jsonData)
+	})))
 	mux.Handle("/app/assets/", apiCfg.middlewareMetricsInc(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		http.ServeFile(w, req, "./index.html")
 		w.Write([]byte(""))
@@ -111,8 +173,8 @@ func main() {
 		w.Write([]byte(fmt.Sprintf("<p>Chirpy has been visited %d times!</p>", apiCfg.fileserverHits.Load())))
 	}))
 	mux.Handle("POST /admin/reset", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		chirpy.DeleteAllChirps(req.Context())
-		chirpy.DeleteAllUsers(req.Context())
+		chirpyDb.DeleteAllChirps(req.Context())
+		chirpyDb.DeleteAllUsers(req.Context())
 		w.WriteHeader(http.StatusOK)
 		apiCfg.fileserverHits.Store(0)
 	}))
@@ -145,7 +207,7 @@ func main() {
 			Body:   formattedBody,
 			UserID: userID,
 		}
-		chirp, err := chirpy.CreateChirp(req.Context(), arg)
+		chirp, err := chirpyDb.CreateChirp(req.Context(), arg)
 		if err != nil {
 			returnError(w, "Error creating chirp", 500)
 			return
@@ -154,10 +216,12 @@ func main() {
 		type userResp struct {
 			Body   string `json:"body"`
 			UserId string `json:"user_id"`
+			Id     string `json:"id"`
 		}
 		resp := userResp{
 			Body:   formattedBody,
 			UserId: chirp.UserID.String(),
+			Id:     chirp.ID.String(),
 		}
 		jsonData, err := json.Marshal(resp)
 
@@ -173,7 +237,7 @@ func main() {
 	}))
 
 	mux.Handle("GET /api/chirps", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		chirps, err := chirpy.GetAllChrips(req.Context())
+		chirps, err := chirpyDb.GetAllChrips(req.Context())
 		if err != nil {
 			returnError(w, "Error creating chirp", 500)
 			return
@@ -182,6 +246,28 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		err = json.NewEncoder(w).Encode(chirps)
+		if err != nil {
+			returnError(w, "Error encoding chirps", 500)
+			return
+		}
+		apiCfg.fileserverHits.Store(0)
+	}))
+	mux.Handle("GET /api/chirps/{id}", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		idStr := req.PathValue("id")
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			returnError(w, "Error while parsing id str to uuid", 500)
+			return
+		}
+		chirp, err := chirpyDb.GetChripById(req.Context(), id)
+		if err != nil {
+			returnError(w, "Error creating chirp", 500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		err = json.NewEncoder(w).Encode(chirp)
 		if err != nil {
 			returnError(w, "Error encoding chirps", 500)
 			return
