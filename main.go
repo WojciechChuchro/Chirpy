@@ -116,6 +116,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		apiCfg.fileserverHits.Store(0)
 	}))
+
 	mux.Handle("POST /api/chirps", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		type parameters struct {
 			Body   string `json:"body"`
@@ -168,6 +169,23 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		w.Write(jsonData)
+		apiCfg.fileserverHits.Store(0)
+	}))
+
+	mux.Handle("GET /api/chirps", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		chirps, err := chirpy.GetAllChrips(req.Context())
+		if err != nil {
+			returnError(w, "Error creating chirp", 500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		err = json.NewEncoder(w).Encode(chirps)
+		if err != nil {
+			returnError(w, "Error encoding chirps", 500)
+			return
+		}
 		apiCfg.fileserverHits.Store(0)
 	}))
 	log.Printf("Server started on http://localhost%s\n", port)

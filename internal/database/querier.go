@@ -13,6 +13,7 @@ type Querier interface {
 	CreateUser(ctx context.Context, email string) (User, error)
 	DeleteAllChirps(ctx context.Context) error
 	DeleteAllUsers(ctx context.Context) error
+	GetAllChrips(ctx context.Context) ([]Chirp, error)
 }
 
 var _ Querier = (*Queries)(nil)
